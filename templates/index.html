@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NL2SQL Agent - DSR Table</title>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f4f7f9; color: #333; margin: 0; padding: 20px; display: flex; justify-content: center; }
+        .container { background-color: white; padding: 30px; border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1); max-width: 900px; width: 100%; }
+        h1 { color: #007bff; margin-top: 0; font-size: 24px; }
+        .header-controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .query-form { display: flex; margin-bottom: 20px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+        .query-form input[type="text"] { flex-grow: 1; padding: 12px 15px; border: none; font-size: 16px; outline: none; }
+        .query-form button { background-color: #007bff; color: white; border: none; padding: 12px 20px; cursor: pointer; font-size: 16px; transition: background-color 0.3s; }
+        .query-form button:hover { background-color: #0056b3; }
+        .result-box { margin-top: 20px; padding: 15px; border: 1px solid #e0e0e0; border-radius: 8px; background-color: #fafafa; }
+        .result-box h2 { font-size: 18px; margin-top: 0; border-bottom: 1px solid #eee; padding-bottom: 8px; margin-bottom: 10px; color: #333; }
+        .status-success { color: #28a745; font-weight: bold; }
+        .status-error { color: #dc3545; font-weight: bold; }
+        .sql-query-block { background-color: #e9ecef; padding: 10px; border-radius: 6px; font-family: 'Courier New', monospace; white-space: pre-wrap; word-break: break-all; margin-bottom: 15px; font-size: 14px; border: 1px solid #dee2e6; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; font-size: 14px; }
+        th { background-color: #f8f9fa; color: #495057; font-weight: 600; }
+        tr:hover { background-color: #f1f1f1; }
+
+        .test-button { padding: 10px 15px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-left: 10px; transition: background-color 0.3s; }
+        .test-button:hover { background-color: #1e7e34; }
+
+        #loading { display: flex; justify-content: center; align-items: center; height: 100px; font-size: 18px; font-weight: 500; color: #007bff; }
+
+        /* NEW STYLING FOR AGGREGATE RESULTS */
+        #aggregate-result {
+            display: none; /* Hidden by default */
+            margin: 20px 0;
+            padding: 30px;
+            text-align: center;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #007bff, #0056b3);
+            color: white;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+        #aggregate-result .label {
+            font-size: 16px;
+            font-weight: 300;
+            opacity: 0.8;
+            margin-bottom: 5px;
+        }
+        #aggregate-result .value {
+            font-size: 48px;
+            font-weight: 700;
+            line-height: 1.1;
+            letter-spacing: -1px;
+        }
+
+        /* Mobile Adjustments */
+        @media (max-width: 600px) {
+            .container { padding: 15px; }
+            .query-form { flex-direction: column; }
+            .query-form input[type="text"], .query-form button { width: 100%; border-radius: 0; }
+            .query-form button { margin-top: 10px; border-radius: 8px; }
+            .header-controls { flex-direction: column; align-items: flex-start; }
+            .test-button { margin-top: 10px; margin-left: 0; width: 100%; }
+        }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-controls">
+            <h1>Ask a question</h1>
+            <button id="test-db-button" class="test-button">Test DB Connection (50 Records)</button>
+        </div>
+
+        <p>Active Provider: <strong>{{ provider_name }}</strong></p>
+
+        <form id="nl-query-form" class="query-form">
+            <input type="text" id="nl-query" placeholder="e.g., total number of lives saved by Panaji station last year?" required>
+            <button type="submit">Execute</button>
+        </form>
+
+        <div id="loading" style="display: none;">Processing request...</div>
+
+        <!-- NEW: Aggregate Result Display -->
+        <div id="aggregate-result">
+            <div class="label">Total Result:</div>
+            <div class="value" id="aggregate-value">--</div>
+        </div>
+
+        <div id="results" class="result-box" style="display: none;">
+            <h2>Query Results</h2>
+            <div class="status-line">
+                Status: <span id="status-output" class="status-success">IDLE</span>
+            </div>
+            <p>Generated SQL:</p>
+            <div id="sql-output" class="sql-query-block">SELECT * FROM dsr_table LIMIT 0;</div>
+
+            <p>Data Table:</p>
+            <div id="data-output">
+                <!-- Data table will be inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('nl-query-form');
+        const sqlOutput = document.getElementById('sql-output');
+        const dataOutput = document.getElementById('data-output');
+        const statusOutput = document.getElementById('status-output');
+        const resultsDiv = document.getElementById('results');
+        const loadingDiv = document.getElementById('loading');
+        const testButton = document.getElementById('test-db-button');
+        const aggregateResultDiv = document.getElementById('aggregate-result');
+        const aggregateValueSpan = document.getElementById('aggregate-value');
+
+
+        function renderTable(headers, results) {
+            if (results.length === 0) {
+                dataOutput.innerHTML = '<p>Query executed successfully, but returned no data rows.</p>';
+                return;
+            }
+
+            let tableHTML = '<table><thead><tr>';
+            headers.forEach(header => {
+                tableHTML += `<th>${header}</th>`;
+            });
+            tableHTML += '</tr></thead><tbody>';
+
+            results.forEach(row => {
+                tableHTML += '<tr>';
+                row.forEach(cell => {
+                    // Convert nulls to 'N/A' and truncate long strings for display
+                    const displayCell = cell === null ? 'N/A' : (String(cell).length > 100 ? String(cell).substring(0, 97) + '...' : String(cell));
+                    tableHTML += `<td>${displayCell}</td>`;
+                });
+                tableHTML += '</tr>';
+            });
+            tableHTML += '</tbody></table>';
+            dataOutput.innerHTML = tableHTML;
+        }
+
+        function isAggregateResult(headers, results) {
+            // An aggregate result typically has 1 header and exactly 1 result row
+            return headers.length === 1 && results.length === 1;
+        }
+
+        function formatAggregateValue(value) {
+            // Simple formatting for numbers (e.g., adding commas, rounding)
+            if (typeof value === 'number' || (typeof value === 'string' && !isNaN(parseFloat(value)))) {
+                const number = parseFloat(value);
+                // Return as an integer if no decimal part, otherwise round to 2 decimals
+                if (number === Math.floor(number)) {
+                    return number.toLocaleString('en-IN');
+                }
+                return number.toFixed(2).toLocaleString('en-IN');
+            }
+            return value;
+        }
+
+        async function executeQuery(endpoint, method, payload = {}) {
+            loadingDiv.style.display = 'block';
+            resultsDiv.style.display = 'none';
+            aggregateResultDiv.style.display = 'none';
+            sqlOutput.textContent = '...';
+            statusOutput.textContent = 'Executing...';
+            statusOutput.className = 'status-success';
+            dataOutput.innerHTML = '';
+
+            try {
+                const response = await fetch(endpoint, {
+                    method: method,
+                    headers: method === 'POST' ? { 'Content-Type': 'application/json' } : {},
+                    body: method === 'POST' ? JSON.stringify(payload) : null,
+                });
+
+                const data = await response.json();
+
+                // 1. Update SQL and Status
+                sqlOutput.textContent = data.generated_sql;
+
+                let success = response.ok && !data.generated_sql.startsWith("ERROR:");
+
+                if (success) {
+                    statusOutput.textContent = "SUCCESS";
+                    statusOutput.className = "status-success";
+                } else {
+                    statusOutput.textContent = "FAILURE";
+                    statusOutput.className = "status-error";
+                }
+
+                // 2. Check for Aggregate Result
+                if (success && isAggregateResult(data.headers, data.results)) {
+                    const resultValue = data.results[0][0];
+                    aggregateValueSpan.textContent = formatAggregateValue(resultValue);
+                    aggregateResultDiv.style.display = 'block';
+                } else {
+                    // 3. Render Table for non-aggregate or standard results
+                    renderTable(data.headers, data.results);
+                    resultsDiv.style.display = 'block';
+                }
+
+            } catch (error) {
+                sqlOutput.textContent = 'A critical network or server error occurred.';
+                statusOutput.textContent = "CRITICAL FAILURE";
+                statusOutput.className = "status-error";
+                dataOutput.innerHTML = `<p>Error details: ${error.message}</p>`;
+                resultsDiv.style.display = 'block';
+            } finally {
+                loadingDiv.style.display = 'none';
+            }
+        }
+
+        // 1. NL Query Form Submission Handler
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const nlQuery = document.getElementById('nl-query').value;
+            await executeQuery('/api/query', 'POST', { query: nlQuery });
+        });
+
+        // 2. Test Button Click Handler
+        testButton.addEventListener('click', async () => {
+            await executeQuery('/api/test_db_records', 'GET');
+        });
+
+
+        // Fetch provider name for display on load
+        async function fetchProvider() {
+            try {
+                const response = await fetch('/api/provider_name');
+                const data = await response.json();
+                document.title = `NL2SQL Agent - ${data.provider}`;
+                document.querySelector('.container p strong').textContent = data.provider;
+            } catch (e) {
+                console.error("Could not fetch provider name:", e);
+                document.querySelector('.container p strong').textContent = 'API Missing';
+            }
+        }
+        fetchProvider();
+    </script>
+</body>
+</html>
