@@ -1,2 +1,26 @@
-.env
+
 /data
+*.log
+*.xlsx
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# Build tools
+.gradle/
+build/
+dist/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Data files
+*.xlsx
+*.csv
