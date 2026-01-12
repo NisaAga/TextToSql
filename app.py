@@ -1,41 +1,62 @@
-# app.py
-
 from flask import Flask, request, jsonify, render_template
 from database.mysql_connector import MySQLExecutor, get_db_schema_description
 from service.sqlai_api import SQLAIAPI
-import sys
-from config import CURRENT_TEXT2SQL_PROVIDER # Kept this import just in case the template relies on it
+from config import CURRENT_TEXT2SQL_PROVIDER
 
 
-# --- NEW FALLBACK STRATEGY CLASS ---
-# Implements the strategy interface without needing an actual API key
+# --- AGGREGATE INTENT (NL FALLBACK ONLY) ---
+def is_aggregate_query_from_nl(nl_query: str) -> bool:
+    """
+    Weak signal: checks if NL query *suggests* aggregation.
+    Used only as a fallback.
+    """
+    nl = nl_query.lower()
+
+    aggregate_keywords = [
+        "total",
+        "number of",
+        "how many",
+        "count",
+        "sum",
+        "average",
+        "avg",
+        "maximum",
+        "minimum",
+        "max",
+        "min"
+    ]
+
+    return any(keyword in nl for keyword in aggregate_keywords)
+
+
+# --- AGGREGATE INTENT (AUTHORITATIVE: SQL-BASED) ---
+def is_aggregate_query_from_sql(sql: str) -> bool:
+    """
+    Strong signal: checks actual SQL for aggregate functions.
+    """
+    if not sql:
+        return False
+
+    sql_lower = sql.lower()
+    aggregate_functions = ["count(", "sum(", "avg(", "min(", "max("]
+
+    return any(fn in sql_lower for fn in aggregate_functions)
+
+
+# --- FALLBACK STRATEGY CLASS ---
 class APIKeyMissingStrategy:
-    """
-    A placeholder strategy used when the AI2SQL API key is missing or invalid.
-    It prevents the app from crashing and returns a specific error message.
-    """
     def __init__(self):
-        print("⚠️ WARNING: API Key Missing Strategy is active. AI queries will be blocked.")
-        pass
+        print("WARNING: API Key Missing Strategy active.")
 
-    # Must implement the exact method name required by the Text2SQLAgent
     def execute_text_to_sql(self, natural_language_query: str, db_schema: str) -> str:
-        """
-        Returns a specific ERROR message that the Text2SQLAgent will catch and display.
-        """
-        # The agent checks for 'ERROR:' prefix, so we use it here.
-        return "ERROR: AI2SQL API key not found/invalid. Please check your config.py."
+        return "ERROR: AI2SQL API key not found or invalid. Please check config.py."
 
 
 app = Flask(__name__)
 
 
-# --- AGENT ORCHESTRATION CLASS (No Change) ---
+# --- AGENT ORCHESTRATION CLASS ---
 class Text2SQLAgent:
-    """
-    Orchestrates the entire flow: Generation -> Execution -> Results.
-    """
-
     def __init__(self, sql_generator_strategy):
         self.generator = sql_generator_strategy
         self.executor = MySQLExecutor()
@@ -43,137 +64,138 @@ class Text2SQLAgent:
 
     def process_query(self, nl_query: str):
         if not self.executor.db_is_ready:
-            return "DB_ERROR", "DB not ready. Check console for startup connection errors.", None
+            return "DB_ERROR", None, "DB not ready. Check startup logs."
 
-        # --- PHASE 1: GENERATION (NL -> SQL) ---
-        generated_sql = self.generator.execute_text_to_sql(nl_query, self.db_schema)
+        # Phase 1: Generate SQL
+        generated_sql = self.generator.execute_text_to_sql(
+            nl_query,
+            self.db_schema
+        )
 
         if generated_sql.startswith("ERROR"):
-            # Catches the API key error or any other generation error
             return "API_ERROR", generated_sql, None
 
-        # --- PHASE 2: EXECUTION (SQL -> Data) ---
+        # Phase 2: Execute SQL
         try:
             with self.executor as db:
                 headers, results = db.execute(generated_sql)
 
-            return "SUCCESS", generated_sql, {"headers": headers, "results": results}
+            return "SUCCESS", generated_sql, {
+                "headers": headers,
+                "results": results
+            }
 
-        except (RuntimeError, ConnectionError) as e:
-            return "DB_ERROR", generated_sql, f"Execution Failed: {str(e)}"
         except Exception as e:
-            return "DB_ERROR", generated_sql, f"Unexpected Error: {type(e).__name__}: {str(e)}"
+            return "DB_ERROR", generated_sql, f"{type(e).__name__}: {str(e)}"
 
 
-# --- END AGENT ORCHESTRATION CLASS ---
-
-
-# --- Strategy Initialization (Handling API Key Gracefully) ---
-
+# --- STRATEGY INITIALIZATION ---
 try:
-    # 1. Attempt to initialize the live API
     text2sql_strategy = SQLAIAPI()
     active_provider_name = "AI2SQL (Active)"
-    print("AI2SQL API key successfully loaded. Full functionality enabled.")
+    print("AI2SQL API initialized successfully.")
 except (ValueError, ImportError) as e:
-    # 2. If ValueError (missing key) or ImportError (missing dependencies) occurs, fall back
     text2sql_strategy = APIKeyMissingStrategy()
     active_provider_name = "AI2SQL (Key Missing)"
-    print(f"❗ FALLBACK MODE ACTIVATED: Failed to initialize AI2SQL API. {e}. The app will continue to run.")
+    print(f"Fallback mode activated: {e}")
 
-
-# 3. Initialize the main Orchestrator Agent
 text2sql_agent = Text2SQLAgent(text2sql_strategy)
-print(f"Active Text-to-SQL Provider: {active_provider_name}")
+print(f"Active Provider: {active_provider_name}")
 
 
-# --- FLASK ROUTES (Minor update to API_ERROR handling) ---
+# --- ROUTES ---
+@app.route('/')
+def index():
+    return render_template("index.html", provider_name=active_provider_name)
+
 
 @app.route('/api/provider_name', methods=['GET'])
 def get_provider_name():
     return jsonify({"provider": active_provider_name})
 
-@app.route('/')
-def index():
-    return render_template('index.html', provider_name=active_provider_name)
 
 @app.route('/api/query', methods=['POST'])
 def handle_query():
     data = request.json
-    natural_language_query = data.get('query')
+    natural_language_query = data.get("query")
 
     if not natural_language_query:
         return jsonify({"error": "No query provided"}), 400
 
-    # 1. Process query using the Agent (NL -> SQL -> Data)
-    status, generated_sql, result_data = text2sql_agent.process_query(natural_language_query)
+    status, generated_sql, result_data = text2sql_agent.process_query(
+        natural_language_query
+    )
 
-    # 2. Handle Errors (API or DB Execution)
+    # --- API ERROR ---
     if status == "API_ERROR":
-        # The generated_sql contains the detailed ERROR message (e.g., 'API key not found')
         return jsonify({
-            "generated_sql": "Failed to generate SQL.",
-            "results": [[generated_sql]], # Display the error message to the user
+            "show_generated_sql": False,
+            "generated_sql": None,
             "headers": ["AI Generation Error"],
+            "results": [[generated_sql]],
             "provider": active_provider_name
         })
 
+    # --- AGGREGATE DECISION (FINAL) ---
+    aggregate_intent = (
+        is_aggregate_query_from_sql(generated_sql)
+        or is_aggregate_query_from_nl(natural_language_query)
+    )
+
+    # --- DB ERROR ---
     if status == "DB_ERROR":
-        error_message = result_data if isinstance(result_data, str) else "Unknown DB Error"
         return jsonify({
-            "generated_sql": generated_sql,
-            "results": [[error_message]],
+            "show_generated_sql": aggregate_intent,
+            "generated_sql": generated_sql if aggregate_intent else None,
             "headers": ["DB Execution Error"],
+            "results": [[result_data]],
             "provider": active_provider_name
         })
 
-    # 3. Handle Success
+    # --- SUCCESS ---
     return jsonify({
-        "generated_sql": generated_sql,
-        "results": result_data["results"],
+        "show_generated_sql": aggregate_intent,
+        "generated_sql": generated_sql if aggregate_intent else None,
         "headers": result_data["headers"],
+        "results": result_data["results"],
         "provider": active_provider_name
     })
 
 
 @app.route('/api/test_db_records', methods=['GET'])
 def test_db_records():
-    """
-    Executes a simple SELECT query to test data retrieval and connection integrity.
-    """
     test_query = "SELECT * FROM dsr_table LIMIT 50;"
 
     if not text2sql_agent.executor.db_is_ready:
         return jsonify({
+            "show_generated_sql": True,
             "generated_sql": test_query,
-            "results": [["DB not ready. Please check console logs for startup errors."]],
             "headers": ["DB Connection Error"],
+            "results": [["DB not ready"]],
             "provider": active_provider_name
         }), 500
 
     try:
-        db = text2sql_agent.executor
-
-        # ✅ Use execute instead of run_query
-        with db as conn_db:
-            headers, results = conn_db.execute(test_query)
+        with text2sql_agent.executor as db:
+            headers, results = db.execute(test_query)
 
         return jsonify({
+            "show_generated_sql": True,
             "generated_sql": test_query,
-            "results": results,
             "headers": headers,
+            "results": results,
             "provider": active_provider_name
         })
 
     except Exception as e:
-        error_message = f"TEST FAILED: {type(e).__name__}: {str(e)}"
         return jsonify({
+            "show_generated_sql": True,
             "generated_sql": test_query,
-            "results": [[error_message]],
             "headers": ["DB Execution Error"],
+            "results": [[str(e)]],
             "provider": active_provider_name
         }), 500
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True)

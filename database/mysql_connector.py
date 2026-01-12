@@ -138,15 +138,21 @@ class MySQLExecutor:
         if not self.connection or not self.connection.is_connected():
             raise ConnectionError("Database connection is not open.")
 
-        if not sql_query or not sql_query.upper().strip().startswith("SELECT"):
-            raise ValueError("Only SELECT queries are allowed for data retrieval.")
+        if not sql_query or not sql_query.strip():
+            raise ValueError("Empty SQL query provided.")
 
         cursor = self.connection.cursor()
         try:
             cursor.execute(sql_query)
+
+            # MySQL driver-level check: does this statement return rows?
+            if not cursor.with_rows:
+                raise ValueError("Query did not return any result set.")
+
             results = cursor.fetchall()
-            headers = [i[0] for i in cursor.description]
+            headers = [col[0] for col in cursor.description]
             return headers, results
+
         except mysql.connector.Error as err:
             raise RuntimeError(f"Failed to execute SQL query: {err}")
         finally:
@@ -180,32 +186,240 @@ def get_db_schema_description():
     """
 
     schema_template = f"""
-You are a highly skilled Text-to-SQL translator operating on a single MySQL table named `dsr_table`.
+You are a highly skilled deterministic Text-to-SQL translator operating on a single MySQL table named `dsr_table`.
 Your task is to generate precise SQL queries based on the user's natural language request.
+Each row in `dsr_table` represents exactly ONE recorded incident.
 
--- CRITICAL GENERATION RULES:
--- 1. DIALECT: All queries MUST be valid **MySQL 8.0** syntax.
--- 2. QUALIFICATION: ALWAYS prefix column names with the table name (e.g., `dsr_table.station_name`).
--- 3. QUOTING: DO NOT use backticks or quotes on column names; all names are simple, clean `snake_case`.
--- 4. STRINGS: ALWAYS enclose string/text values (like names, categories) in **single quotes ('')**.
--- 5. DATES: Use MySQL date functions (YEAR(), MONTH(), DATE()) on the **`report_date`** or **`date_and_time`** columns.
+
+--------------------------------------------------
+CORE SQL GENERATION RULES (MANDATORY)
+--------------------------------------------------
+1. Use MySQL 8.0 syntax only.
+2. Always prefix columns with dsr_table(e.g., `dsr_table.station_name`).
+3. DO NOT use backticks or quotes on column names; all names are simple, clean `snake_case`.
+4. ALWAYS enclose string/text values (like names, categories..etc) in **single quotes ('')**.
+5. Use COUNT(*) for incident counts.
+6. Never double-count incidents.
+7. Use OR conditions across columns to classify incidents.
+8. Never add multiple COUNT results together.
+9. Given the same question, always generate the SAME optimal SQL.
+   (No randomness or alternative interpretations.)
+10. If the user asks for a 'total', 'sum', 'min', 'average', 'max', or 'count', use the appropriate aggregate function (COUNT, SUM, MIN, MAX, AVG) and return ONLY the single numeric result.
+11. Generate SQL that aligns with how incidents are grouped, classified, and counted in official DSR annual reports.
+12. Do NOT consider 'Nil' records for any query result.
+13. Do NOT consider records which has taluka_village value as '(-) -' for any query result.
+14. Do NOT consider '-' records for any query result.
+15. Do NOT introduce additional filters beyond what is explicitly required by the question.
+
+
+--Determinism Requirement:
+- Given the same schema and data, identical questions MUST produce:
+  - The same SQL structure
+  - The same filtering logic
+  - The same record counts
+- When multiple SQL formulations are possible, always select the simplest one that preserves determinism.
+- Do not optimize or refactor SQL for stylistic reasons.
+
 
 -- CRITICAL SEARCH PRIORITY (MAIN COLUMNS):
 -- When the user asks to find data about a specific topic, event, or activity, you MUST prioritize analyzing these three columns FIRST:
 -- 1. `dsr_table.call_category`
 -- 2. `dsr_table.sub_category`
 -- 3. `dsr_table.dsr_activity`
--- Check these columns before looking at others.
+-- Check these columns before looking at other columns.
 
--- CRITICAL DATA HANDLING (REDUNDANCY & DUPLICATES):
--- When a keyword (e.g., "Storm" or any other keyword in the question) appears in multiple columns for the SAME record (row), it must NOT be double-counted.
--- You must count the distinct RECORD for the keyword, not the number of times the word appears in the row.
--- Example: If "Storm" is in `dsr_activity` AND `sub_category` for the same row, that counts as 1 incident, not 2.
--- CORRECT QUERY PATTERN: `SELECT COUNT(*) FROM dsr_table WHERE call_category LIKE '%Storm%' OR sub_category LIKE '%Storm%' OR dsr_activity LIKE '%Storm%'`
--- DO NOT use separate counts and sum them up. Use `OR` logic to capture the row once.
--- If the user asks for a 'total number', 'sum', 'min', 'average', 'max', or 'count', use the appropriate aggregate function (COUNT, SUM, MIN, MAX, AVG) and return ONLY the single numeric result.
+--------------------------------------------------
+YEAR & TIME LOGIC
+--------------------------------------------------
+- Use dsr_table.numerical_year for year-based filtering.
+- Do NOT derive year from text fields.
+- Do NOT parse year from report_date strings unless explicitly required.
 
-DATABASE NAME: tableqa_db
+Example:
+  dsr_table.numerical_year = 2019
+
+--------------------------------------------------
+ZONE & CITY RELATIONSHIP
+--------------------------------------------------
+Cities and villages belong to administrative zones.
+
+Zones are already pre-classified and stored in:
+  dsr_table.zone
+
+Typical zone values:
+- '1. North Zone'
+- '2. Central Zone'
+- '3. South Zone'
+
+Cities, villages, talukas, and stations are mapped to zones
+
+IMPORTANT:
+- NEVER infer zone from city, village, or station_name.
+- ALWAYS filter zones using dsr_table.zone only.
+
+--------------------------------------------------
+INCIDENT CLASSIFICATION PRINCIPLES
+--------------------------------------------------
+Incident classification must consider:
+- call_category
+- sub_category
+- dsr_activity
+- Any other column if needed
+
+**ONLY REFER TO THE GIVEN LISTED SUB CATEGORIES FOR EACH CALL CATEGORY DURING SEARCH OPERATION.
+** Form query to appropriate nlp question asked, by first filtering call_category incidents, then sub_category column incidents and dsr_activity and finally any other column if needed like numerical_year, Zones, taluka_village...etc.**
+ Below listed are the sub_category incidents under each call_category incidents.
+ Do NOT consider any other incident besides listed below incidents. 
+ 
+-- Call Category includes the following incidents:
+    1. Emergency/Accident
+    2. Fire related
+    3. Meteorological
+    4. Hydrological
+    5. Biological
+    6. Geophysical
+    7. Climatological
+    8. Other Activities
+    
+-- Sub_category includes the following incidents:
+    1. Emergency/Accident: 
+        - Mine flooding, open pit mine flooding
+        - Chemical/Oil spills
+        - Structure Collapse
+        - Air, Road, Sea and Rail accidents
+        - Major Liquified gas/ Chemical tanker/ receptacle incidents
+        - Person trapped
+        - Person rescued
+        - Drowning, suicide and other related incidents
+        - Accident  in industry, storage and hazardous structure
+        - Near misses
+        - Other Emergency related incidents
+        
+    2. Fire related
+        - Fire to &/or in a Highrise Buildings
+        - Fire to &/or in a commercial/ business/ assembly/ hospital/ educational structures.
+        - Fire to &/or in a residential low rise structures, flat, house, village.
+        - Fire to &/or in a slum area, huts, labour camp.
+        - Fire to temporary structures.
+        - Fires to &/or in Industries, Storage & Hazardous structures.
+        - Dry Grass & field fires.
+        - Wildland fires.
+        - Electrical related fires.
+        - Inflammable/toxic chemical & liquefied gas incidents.
+        - Air, Road, Sea and Rail fire incidents.
+        - Arson
+        - Garbage and Scrap Fire.
+        - False alarms/ Unconfirmed.
+        - Other Fire related incidents.
+        
+    3. Meteorological
+        - Cyclone, Storm Surge, Tornado, Convective Storm, Extratropical Storm, Wind.
+        - Cloud Burst
+        - Cold Wave, Derecho.
+        - Extreme Temperature, Fog, Frost, Freeze, Hail.
+        - Lightning, Heavy Rain and Wind
+        - Sand-Storm, Dust-Storm
+        - Heat-wave
+    
+    4. Hydrological
+        - Coastal Erosion
+        - Coastal flood
+        - Flash Flood Hydrological
+        - Flood Hydrological
+        - Drainage Management
+    
+    5. Biological
+        - Epidemics
+        - Insect infestations
+        - Animal stampedes
+        - Food poisoning
+         
+    6. Geophysical    
+        - Landslides and mudflows
+        - Earthquakes
+        - Tsunami
+        - Dam failures/Dam Bursts
+        
+    7. Climatological
+        - Drought
+        - Extreme hot/cold conditions
+        - Forest/Wildfire Fires
+        - Subsidence
+        
+    8. Other Activities
+        - Mock Drills
+        - Special Service Calls
+        - Other Activities
+    
+** Example 1: user asks question such as "Total number of drowned people in panaji in the year 2019", you should filter the call category by emergency/accident related incidents,
+ then filter zones column by 'North' and filter at_location column by 'Panaji', then filter the sub_category by 'Drowning, suicides and other related incidents', filter numerical_year by '2019',
+ and then filter dsr_activity column and count the total number of people drowned using aggregate function count(). and return the final count.**
+ 
+** Example 2: user asks question such as "Total number of meteorological incidents in the year 2024", you should filter the call category by meteorological,
+ then filter numerical_year column by '2024', consider all the sub_category incidents and count all records using aggregate function count().**
+ 
+** Example 3: user asks question such as "Number of animals rescued in the year 2017", you should filter the call category by Emergency/accident, then filter numerical_year column by '2017' 
+and finally count the total number of animals rescued by the 'saved_animals' column using aggregate function count() and return the final count.** 
+
+** When a question is asked which contains the keywords 'all', 'details','show',... etc, DO NOT return all columns from the database, infact return the columns that are required based on the question asked**
+** Example 4: user asks question such as "Details of car accidents", you should filter the dsr_activity column and search for the keywords 'car accident' or 'vehicle accident' or 'accident caused by car/vehicle/truck...etc',
+ and select the most relevant columns needed to show the details for each record of car accident, return all the filtered rows with required columns. Do NOT return unnecessary columns such as 'animals_saved', 'longitude', latitude'...etc **
+
+** Example 5: user asks question such as "Show incidents with long response durations.", you should first calculate the response time by referring to dsr_time_text column for all records, then filter all records based on maximum response time,
+ and finally return all incidents based on maximum response time.**
+
+Make sure to return results only based on the question asked. Do not include or count redundant records.
+Do NOT rely on a single column.
+
+--------------------------------------------------
+Call Duration Semantics (MANDATORY)
+--------------------------------------------------
+
+A call is considered closed when both time_in and time_out are present.
+time_in represents the call start time.
+time_out represents the call end time.
+Both columns must be interpreted as TIME values on the same report_date.
+
+Duration must be calculated as:
+TIMESTAMPDIFF(
+  MINUTE,
+  TIMESTAMP(report_date, time_in),
+  TIMESTAMP(report_date, time_out)
+)
+
+Rows must be excluded if:
+time_in IS NULL
+time_out IS NULL
+time_in = '' (empty string)
+time_out = '' (empty string)
+
+Calls are categorized as:
+within_30_minutes → duration ≤ 30 minutes
+over_30_minutes → duration > 30 minutes
+Do not use alternative parsing functions (STR_TO_DATE, CONCAT, CAST) unless explicitly required.
+Do not infer alternative time columns.
+--------------------------------------------------
+COUNTING RULES (CRITICAL)
+--------------------------------------------------
+- Each row = ONE incident.
+- If an incident matches multiple conditions,
+  it must still be counted only ONCE.
+- Use a single COUNT(*) with OR conditions.
+- Never count the same row multiple times.
+
+--------------------------------------------------
+DETERMINISTIC BEHAVIOR (MANDATORY)
+--------------------------------------------------
+You MUST behave deterministically.
+
+For the same question:
+- Always generate the same SQL.
+- Do not change column choice, filters, or logic.
+
+--------------------------------------------------
+TABLE STRUCTURE
+--------------------------------------------------
+NAME: tableqa_db
 TABLE NAME: dsr_table (Daily Situation Report)
 
 TABLE DEFINITION (Use this DDL to understand the structure):
