@@ -15,7 +15,7 @@ SQLAI_API_KEY = os.getenv("SQLAI_API_KEY")
 # Use os.getenv for all sensitive credentials
 MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "tableqa_db")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "root")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "dsr")
 
 # NOTE: The second argument in os.getenv is a default value if the variable is not found.

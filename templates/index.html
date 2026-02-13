@@ -43,6 +43,7 @@
             border: 1px solid #ddd;
             border-radius: 8px;
             overflow: hidden;
+            gap: 0;
         }
 
         .query-form input {
@@ -64,6 +65,11 @@
 
         .query-form button:hover {
             background: #0056b3;
+        }
+
+        .query-form button:disabled {
+            background: #a0a0a0;
+            cursor: not-allowed;
         }
 
         .test-button {
@@ -166,6 +172,9 @@
                placeholder="e.g. total number of records last year"
                required>
         <button type="submit">Execute</button>
+        <button type="button" id="exportExcelBtn" disabled>
+            Export to Excel
+        </button>
     </form>
 
     <div id="loading">Processing request…</div>
@@ -193,6 +202,9 @@
     const aggregateBox = document.getElementById('aggregate-result');
     const aggregateValue = document.getElementById('aggregate-value');
     const testBtn = document.getElementById('test-db-button');
+    const exportBtn = document.getElementById('exportExcelBtn');
+
+    let lastGeneratedSQL = null; // 🔧 FIX
 
     function renderTable(headers, rows) {
         let html = '<table><thead><tr>';
@@ -215,6 +227,7 @@
         aggregateBox.style.display = 'none';
         sqlOutput.style.display = 'none';
         dataOutput.innerHTML = '';
+        exportBtn.disabled = true;
 
         try {
             const res = await fetch(endpoint, {
@@ -228,26 +241,24 @@
             loading.style.display = 'none';
             resultsBox.style.display = 'block';
 
-            const success = res.ok;
+            statusOutput.textContent = res.ok ? 'SUCCESS' : 'FAILURE';
+            statusOutput.className = res.ok ? 'status-success' : 'status-error';
 
-            statusOutput.textContent = success ? 'SUCCESS' : 'FAILURE';
-            statusOutput.className = success ? 'status-success' : 'status-error';
-
-            if (data.show_generated_sql && data.generated_sql) {
+            if (data.generated_sql) {
+                lastGeneratedSQL = data.generated_sql; // 🔧 FIX
                 sqlOutput.textContent = data.generated_sql;
                 sqlOutput.style.display = 'block';
+                exportBtn.disabled = false;
             }
 
             if (
-                success &&
                 Array.isArray(data.headers) &&
                 data.headers.length === 1 &&
-                Array.isArray(data.results) &&
                 data.results.length === 1
             ) {
                 aggregateValue.textContent = data.results[0][0];
                 aggregateBox.style.display = 'block';
-            } else if (data.headers && data.results) {
+            } else {
                 renderTable(data.headers, data.results);
             }
 
@@ -256,7 +267,7 @@
             resultsBox.style.display = 'block';
             statusOutput.textContent = 'CRITICAL FAILURE';
             statusOutput.className = 'status-error';
-            dataOutput.innerHTML = `<p>Error details: ${err.message}</p>`;
+            dataOutput.innerHTML = err.message;
         }
     }
 
@@ -269,6 +280,29 @@
 
     testBtn.addEventListener('click', () => {
         execute('/api/test_db_records', 'GET');
+    });
+
+    exportBtn.addEventListener('click', () => {
+        if (!lastGeneratedSQL) return;
+
+        fetch('/api/query/export/excel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sql: lastGeneratedSQL }) // 🔧 FIX
+        })
+        .then(res => {
+            if (!res.ok) throw new Error("Export failed");
+            return res.blob();
+        })
+        .then(blob => {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'ai_generated_report.xlsx';
+            a.click();
+            window.URL.revokeObjectURL(url);
+        })
+        .catch(() => alert("Failed to export Excel file."));
     });
 </script>
 

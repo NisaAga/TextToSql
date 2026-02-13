@@ -11,49 +11,35 @@ from config import MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 
 # --- SCHEMA DEFINITION FOR TABLE CREATION ---
 SCHEMA_SQL_DDL = """
-CREATE TABLE IF NOT EXISTS dsr_table (
-    report_date DATETIME,
-    station_name TEXT,
-    call_category TEXT,
-    reinforcement_reattended TEXT,
-    time_out TEXT, 
-    time_in TEXT,
-    vehicle_no TEXT,
-    lost_human TEXT,
-    saved_human TEXT,
-    lost_animal TEXT,
-    saved_animal TEXT,
-    lost_value_rs TEXT,
-    saved_value_rs TEXT,
+CREATE TABLE dsr_table (
+    report_date DATE,
+    station_name VARCHAR(255),
+    call_category VARCHAR(255),
+    reinforcement_reattended VARCHAR(50),
+    time_out VARCHAR(50),
+    time_in VARCHAR(50),
+    vehicle_no VARCHAR(50),
+    lost_human INT(25),
+    saved_human INT(25),
+    lost_animal INT(25),
+    saved_animal INT(25),
+    lost_value_rs INT(25),
+    saved_value_rs INT(25),
     dsr_activity TEXT,
     near_location TEXT,
     at_location TEXT,
     attended_by TEXT,
     sub_category TEXT,
-    taluka TEXT,
-    city_village TEXT,
-    additional_note_dsr TEXT, 
-    additional_remarks TEXT,
-    todays_dsr TEXT,
-    dsr_time_text TEXT,
-    lives_saved TEXT,
-    lives_lost TEXT,
-    total_lives_lost TEXT,
-    latitude TEXT,
-    longitude TEXT,
-    month_year VARCHAR(10),
-    zone VARCHAR(50),
-    weekday VARCHAR(10),
-    hour_on_day VARCHAR(50),
-    numerical_year INT,
-    zone_and_city_village TEXT,
-    overview_of_record TEXT,
-    taluka_village VARCHAR(100),
-    dsr_activity_and_note TEXT,
-    near_and_at TEXT,
-    near_at_and_by TEXT,
-    date_and_time DATETIME,
-    filter_reinforcement VARCHAR(50)
+    taluka VARCHAR(255),
+    city_village VARCHAR(255),
+    lives_saved VARCHAR(50),
+    lives_lost VARCHAR(50),
+    total_lives_lost INT(25),
+    zone VARCHAR(255),
+    weekday VARCHAR(255),
+    numerical_year YEAR,
+    taluka_village VARCHAR(255),
+    date_and_time VARCHAR(255)
 );
 """
 
@@ -207,19 +193,19 @@ CORE SQL GENERATION RULES (MANDATORY)
 10. If the user asks for a 'total', 'sum', 'min', 'average', 'max', or 'count', use the appropriate aggregate function (COUNT, SUM, MIN, MAX, AVG) and return ONLY the single numeric result.
 11. Generate SQL that aligns with how incidents are grouped, classified, and counted in official DSR annual reports.
 12. Do NOT consider 'Nil' records for any query result.
-13. Do NOT consider records which has taluka_village value as '(-) -' for any query result.
+13. Do NOT consider '(-) -' records for any query result.
 14. Do NOT consider '-' records for any query result.
 15. Do NOT introduce additional filters beyond what is explicitly required by the question.
-
+16. Do NOT answer any general question asked besides relating to the database table dsr_table. (e.g. 'What is today's date', 'Which is the largest flower in the world')
 
 --Determinism Requirement:
 - Given the same schema and data, identical questions MUST produce:
   - The same SQL structure
   - The same filtering logic
   - The same record counts
-- When multiple SQL formulations are possible, always select the simplest one that preserves determinism.
+- When multiple SQL formulations are possible, always select the optimal one that preserves determinism.
 - Do not optimize or refactor SQL for stylistic reasons.
-
+- If the same question is executed multiple times then generate the deterministic optimal query for every execution.
 
 -- CRITICAL SEARCH PRIORITY (MAIN COLUMNS):
 -- When the user asks to find data about a specific topic, event, or activity, you MUST prioritize analyzing these three columns FIRST:
@@ -252,6 +238,10 @@ Typical zone values:
 - '3. South Zone'
 
 Cities, villages, talukas, and stations are mapped to zones
+- Make sure to check dsr.station_name first, if the area mentioned in question isn't in the station_name list then check for other 
+columns like: dsr.city_village, dsr.taluka, dsr.at_location, dsr.near_location, dsr.taluka_village inorder to search records for a particular given area name in the question.
+
+- ONLY search and return records based on station_name areas mentioned in question.
 
 IMPORTANT:
 - NEVER infer zone from city, village, or station_name.
@@ -267,7 +257,7 @@ Incident classification must consider:
 - Any other column if needed
 
 **ONLY REFER TO THE GIVEN LISTED SUB CATEGORIES FOR EACH CALL CATEGORY DURING SEARCH OPERATION.
-** Form query to appropriate nlp question asked, by first filtering call_category incidents, then sub_category column incidents and dsr_activity and finally any other column if needed like numerical_year, Zones, taluka_village...etc.**
+** Form query to appropriate nlp question asked, by first filtering call_category incidents and sub_category column incidents and finally any other column if needed like dsr_activity, numerical_year, Zones, taluka_village...etc.**
  Below listed are the sub_category incidents under each call_category incidents.
  Do NOT consider any other incident besides listed below incidents. 
  
@@ -283,43 +273,44 @@ Incident classification must consider:
     
 -- Sub_category includes the following incidents:
     1. Emergency/Accident: 
-        - Mine flooding, open pit mine flooding
-        - Chemical/Oil spills
-        - Structure Collapse
         - Air, Road, Sea and Rail accidents
-        - Major Liquified gas/ Chemical tanker/ receptacle incidents
-        - Person trapped
-        - Person rescued
+        - Animal Rescue
+        - Chemical/Oil spills
         - Drowning, suicide and other related incidents
-        - Accident  in industry, storage and hazardous structure
+        - Major Liquified gas/ Chemical tanker/ receptacle incidents
         - Near misses
         - Other Emergency related incidents
-        
+        - Open pit mine flooding
+        - Person trapped
+        - Person rescued
+        - Structure Collapse
+                   
     2. Fire related
+        - Air, Road, Sea and Rail fire incidents.
+        - Arson
+        - Dry Grass & field fires.
+        - Electrical related fires.
         - Fire to &/or in a Highrise Buildings
         - Fire to &/or in a commercial/ business/ assembly/ hospital/ educational structures.
         - Fire to &/or in a residential low rise structures, flat, house, village.
         - Fire to &/or in a slum area, huts, labour camp.
         - Fire to temporary structures.
         - Fires to &/or in Industries, Storage & Hazardous structures.
-        - Dry Grass & field fires.
-        - Wildland fires.
-        - Electrical related fires.
-        - Inflammable/toxic chemical & liquefied gas incidents.
-        - Air, Road, Sea and Rail fire incidents.
-        - Arson
-        - Garbage and Scrap Fire.
         - False alarms/ Unconfirmed.
+        - Garbage and Scrap Fire.
+        - Inflammable/toxic chemical & liquefied gas incidents.
         - Other Fire related incidents.
-        
+        - Wildland fires.
+   
     3. Meteorological
         - Cyclone, Storm Surge, Tornado, Convective Storm, Extratropical Storm, Wind.
         - Cloud Burst
         - Cold Wave, Derecho.
         - Extreme Temperature, Fog, Frost, Freeze, Hail.
-        - Lightning, Heavy Rain and Wind
+        - Lightning, Heavy Rain/wind
         - Sand-Storm, Dust-Storm
         - Heat-wave
+        - Trees or branches fallen on Structures,Roads,Electrical lines,Vehicles due to heavy winds/rains.
     
     4. Hydrological
         - Coastal Erosion
@@ -398,6 +389,19 @@ within_30_minutes → duration ≤ 30 minutes
 over_30_minutes → duration > 30 minutes
 Do not use alternative parsing functions (STR_TO_DATE, CONCAT, CAST) unless explicitly required.
 Do not infer alternative time columns.
+
+--------------------------------------------------
+REPORT GENERATION RULES
+--------------------------------------------------
+- Some of the questions asked can also be generating a report as described in the question.
+- For report generation follow this format:
+    1) Provide sql query that involves only the required columns as per the criteria asked in the question. 
+    2) Combine 2 or more column if required, as one column to show the data. 
+        Example 1: combine columns 'sub_category' and 'call_category' as one column 'category' and return the data.
+        Example 2: combine columns 'dsr_activity' ,'at_location' and 'taluka' as one column 'Activity and location' and return the data.
+        Example 3: combine columns 'lives_lost' and 'lost_value_rs' as one column 'lives and property lost' and return the data.
+    3) The columns returned by the sql query will be later used to print as pdf so make sure to include relevant and necessary columns as per the question asked.
+
 --------------------------------------------------
 COUNTING RULES (CRITICAL)
 --------------------------------------------------
@@ -419,55 +423,41 @@ For the same question:
 --------------------------------------------------
 TABLE STRUCTURE
 --------------------------------------------------
-NAME: tableqa_db
+NAME: dsr
 TABLE NAME: dsr_table (Daily Situation Report)
 
 TABLE DEFINITION (Use this DDL to understand the structure):
 {SCHEMA_SQL_DDL}
 
---- NOTE ON COLUMNS (50 Columns – Detailed Descriptions) ---
-- `report_date`: The original datetime when the report was created (DATETIME).
+--- NOTE ON COLUMNS (28 Columns – Detailed Descriptions) ---
+- `report_date`: The original date when the report was created (DATE).
 - `station_name`: Full name of the fire station responding to the call.
 - `call_category`: High-level classification of the incident (e.g., 'Fire related', 'Emergency').
-- `reinforcement_reattended`: Indicates if the call required reinforcement (e.g., 'Yes', 'No').
-- `time_out`: Time (text format) when the team departed the station.
-- `time_in`: Time (text format) when the team returned to base.
+- `reinforcement_reattended`: Indicates if the call required reinforcement (e.g., 'R1', 'R2').
+- `time_out`: Time (varchar format) when the team departed the station.
+- `time_in`: Time (varchar format) when the team returned to base.
 - `vehicle_no`: Registration number of the fire or rescue vehicle.
-- `lost_human`: Number or text count of human lives lost.
-- `saved_human`: Number or text count of human lives saved.
-- `lost_animal`: Number or text count of animals lost.
-- `saved_animal`: Number or text count of animals rescued.
-- `lost_value_rs`: Estimated financial loss due to the incident in rupees (TEXT/VARCHAR).
-- `saved_value_rs`: Estimated property or value saved in rupees (TEXT/VARCHAR).
-- `dsr_activity`: Detailed textual activity or description of the operations performed.
+- `lost_human`: Number or count of human lives lost (int format).
+- `saved_human`: Number or count of human lives saved (int format).
+- `lost_animal`: Number or count of animals lost (int format).
+- `saved_animal`: Number or count of animals rescued (int format).
+- `lost_value_rs`: Estimated financial loss due to the incident in rupees (int format).
+- `saved_value_rs`: Estimated property or value saved in rupees (int format).
+- `dsr_activity`: Detailed textual activity or description of the operations performed or held.
 - `near_location`: Landmark or general area near the site of incident.
 - `at_location`: Exact address or spot where the incident occurred.
 - `attended_by`: Names or ranks of personnel attending the call.
 - `sub_category`: Sub-classification under main call category (e.g., 'Dry Grass & field fires').
 - `taluka`: Administrative region (taluka/tehsil) where the incident occurred.
 - `city_village`: Specific city or village name of the incident location.
-- `additional_note_dsr`: Additional notes related to the DSR.
-- `additional_remarks`: Other remarks not officially part of the DSR.
-- `todays_dsr`: Summary of the DSR entry for that specific day.
-- `dsr_time_text`: Textual representation of time context for the DSR (e.g., 'Morning', 'Evening').
-- `lives_saved`: Text field indicating number or time context of lives saved.
-- `lives_lost`: Text field representing human lives lost.
-- `total_lives_lost`: Cumulative total of all lives lost across incidents or updates.
-- `latitude`: Latitude coordinate of the incident.
-- `longitude`: Longitude coordinate of the incident.
-- `month_year`: Month and Year combined (e.g., 'Dec-2022').
-- `zone`: Geographical or administrative zone (e.g., 'North Zone', '3. South Zone').
+- `lives_saved`: number or count of lives saved, shown in this format (Eg. Animal:1, Human:2).
+- `lives_lost`: number or count of lives lost, shown in this format (Eg. Animal:1, Human:2).
+- `total_lives_lost`: Cumulative total of all lives lost across incidents or updates (int format).
+- `zone`: Geographical or administrative zone (e.g., '1. North Zone', '3. South Zone').
 - `weekday`: Day of the week (e.g., 'Saturday').
-- `hour_on_day`: Time range or specific hour (e.g., '0:00 to 2:00').
-- `numerical_year`: The year stored as a four-digit integer (INT).
-- `zone_and_city_village`: Merged text field combining geographical zone and the specific city/village.
-- `overview_of_record`: A general summary or descriptive overview of the incident record.
+- `numerical_year`: The year stored as a four-digit integer (year format).
 - `taluka_village`: Merged field for administrative location details (Taluka and Village).
-- `dsr_activity_and_note`: Merged field of the detailed DSR activity description and any additional notes.
-- `near_and_at`: Merged field combining the near location landmark and the exact incident location.
-- `near_at_and_by`: Merged field combining location details (near/at) and the attending personnel.
-- `date_and_time`: A complete DATETIME field derived from date and time components (use this for temporal filtering).
-- `filter_reinforcement`: A simplified or filtered version of the reinforcement status.
+- `date_and_time`: A complete DATETIME field derived from date and time components, shown in this format (Eg. 2023-01-01 [09:46 to 10:25 (00:39)]).
 ---
 """
     return schema_template.strip()
