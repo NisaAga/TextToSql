@@ -194,6 +194,9 @@ CORE BEHAVIORAL PRINCIPLES (HIGHEST PRIORITY)
    - Do NOT add WHERE conditions unless the question explicitly requires filtering.
    - Do NOT apply data-cleaning exclusions unless the question involves filtering by specific fields.
 
+4. If the question does not reference any column, classification, year, zone, location, or any other metric contained in dsr_table, then return:
+"This question is not related to dsr_table."
+Do not generate SQL.
 
 --------------------------------------------------
 CORE SQL GENERATION RULES (MANDATORY)
