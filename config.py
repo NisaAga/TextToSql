@@ -1,7 +1,7 @@
 # config.py
 import os
 from dotenv import load_dotenv
-
+from sqlalchemy import create_engine
 # Load variables from the .env file into the environment
 load_dotenv()
 
@@ -13,9 +13,12 @@ SQLAI_API_KEY = os.getenv("SQLAI_API_KEY")
 
 # --- MySQL Configuration ---
 # Use os.getenv for all sensitive credentials
-MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
-MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "root")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "dsr")
+DATABASE_URL = os.getenv("MYSQL_URL")
+
+if not DATABASE_URL:
+    # Fallback for local development
+    DATABASE_URL = "mysql+pymysql://root:password@localhost:3306/mydatabase"
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 # NOTE: The second argument in os.getenv is a default value if the variable is not found.
